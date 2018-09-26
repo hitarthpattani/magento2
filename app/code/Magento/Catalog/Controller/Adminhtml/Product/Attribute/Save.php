@@ -7,17 +7,20 @@
 
 namespace Magento\Catalog\Controller\Adminhtml\Product\Attribute;
 
+use Magento\Framework\App\Action\HttpPostActionInterface as HttpPostActionInterface;
 use Magento\Backend\App\Action\Context;
 use Magento\Backend\Model\View\Result\Redirect;
 use Magento\Catalog\Api\Data\ProductAttributeInterface;
 use Magento\Catalog\Controller\Adminhtml\Product\Attribute;
 use Magento\Catalog\Helper\Product;
+use Magento\Catalog\Model\Product\Attribute\Frontend\Inputtype\Presentation;
 use Magento\Catalog\Model\Product\AttributeSet\BuildFactory;
 use Magento\Catalog\Model\ResourceModel\Eav\AttributeFactory;
 use Magento\Eav\Model\Adminhtml\System\Config\Source\Inputtype\Validator;
 use Magento\Eav\Model\Adminhtml\System\Config\Source\Inputtype\ValidatorFactory;
 use Magento\Eav\Model\Entity\Attribute\Set;
 use Magento\Eav\Model\ResourceModel\Entity\Attribute\Group\CollectionFactory;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\Cache\FrontendInterface;
 use Magento\Framework\Controller\Result\Json;
 use Magento\Framework\Controller\ResultFactory;
@@ -31,7 +34,7 @@ use Magento\Framework\View\Result\PageFactory;
 /**
  * @SuppressWarnings(PHPMD.CouplingBetweenObjects)
  */
-class Save extends Attribute
+class Save extends Attribute implements HttpPostActionInterface
 {
     /**
      * @var BuildFactory
@@ -69,17 +72,23 @@ class Save extends Attribute
     private $layoutFactory;
 
     /**
+     * @var Presentation
+     */
+    private $presentation;
+
+    /**
      * @param Context $context
      * @param FrontendInterface $attributeLabelCache
      * @param Registry $coreRegistry
-     * @param BuildFactory $buildFactory
      * @param PageFactory $resultPageFactory
+     * @param BuildFactory $buildFactory
      * @param AttributeFactory $attributeFactory
      * @param ValidatorFactory $validatorFactory
      * @param CollectionFactory $groupCollectionFactory
      * @param FilterManager $filterManager
      * @param Product $productHelper
      * @param LayoutFactory $layoutFactory
+     * @param Presentation|null $presentation
      * @SuppressWarnings(PHPMD.ExcessiveParameterList)
      */
     public function __construct(
@@ -93,7 +102,8 @@ class Save extends Attribute
         CollectionFactory $groupCollectionFactory,
         FilterManager $filterManager,
         Product $productHelper,
-        LayoutFactory $layoutFactory
+        LayoutFactory $layoutFactory,
+        Presentation $presentation = null
     ) {
         parent::__construct($context, $attributeLabelCache, $coreRegistry, $resultPageFactory);
         $this->buildFactory = $buildFactory;
@@ -103,6 +113,7 @@ class Save extends Attribute
         $this->validatorFactory = $validatorFactory;
         $this->groupCollectionFactory = $groupCollectionFactory;
         $this->layoutFactory = $layoutFactory;
+        $this->presentation = $presentation ?: ObjectManager::getInstance()->get(Presentation::class);
     }
 
     /**
@@ -115,6 +126,7 @@ class Save extends Attribute
     {
         $data = $this->getRequest()->getPostValue();
         if ($data) {
+            $this->preprocessOptionsData($data);
             $setId = $this->getRequest()->getParam('set');
 
             $attributeSet = null;
@@ -191,6 +203,8 @@ class Save extends Attribute
                 }
             }
 
+            $data = $this->presentation->convertPresentationDataToInputType($data);
+
             if ($attributeId) {
                 if (!$model->getId()) {
                     $this->messageManager->addErrorMessage(__('This attribute no longer exists.'));
@@ -205,7 +219,7 @@ class Save extends Attribute
 
                 $data['attribute_code'] = $model->getAttributeCode();
                 $data['is_user_defined'] = $model->getIsUserDefined();
-                $data['frontend_input'] = $model->getFrontendInput();
+                $data['frontend_input'] = $data['frontend_input'] ?? $model->getFrontendInput();
             } else {
                 /**
                  * @todo add to helper and specify all relations for properties
@@ -300,6 +314,28 @@ class Save extends Attribute
             }
         }
         return $this->returnResult('catalog/*/', [], ['error' => true]);
+    }
+
+    /**
+     * Extract options data from serialized options field and append to data array.
+     *
+     * This logic is required to overcome max_input_vars php limit
+     * that may vary and/or be inaccessible to change on different instances.
+     *
+     * @param array $data
+     * @return void
+     */
+    private function preprocessOptionsData(&$data)
+    {
+        if (isset($data['serialized_options'])) {
+            $serializedOptions = json_decode($data['serialized_options'], JSON_OBJECT_AS_ARRAY);
+            foreach ($serializedOptions as $serializedOption) {
+                $option = [];
+                parse_str($serializedOption, $option);
+                $data = array_replace_recursive($data, $option);
+            }
+        }
+        unset($data['serialized_options']);
     }
 
     /**
